@@ -1,0 +1,286 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, filedialog
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet
+import math
+
+# ==========================================================
+# CONSTANTES FÍSICAS
+# ==========================================================
+# Gravidade (m/s²)
+g = 9.81
+
+# ==========================================================
+# BASE DE FLUIDOS (valores típicos)
+# ==========================================================
+fluids = {
+    "Water (20°C)": {"rho": 998, "mu": 1},
+    "Milk": {"rho": 1030, "mu": 2}
+}
+
+# ==========================================================
+# VARIÁVEIS GLOBAIS
+# ==========================================================
+last_result_text = ""  # Guarda o relatório completo
+logo_path = None       # Caminho do logo escolhido
+
+# ==========================================================
+# FUNÇÃO PRINCIPAL DE CÁLCULO
+# ==========================================================
+def calculate():
+    global last_result_text
+
+    try:
+        # ==================================================
+        # INPUTS DO USUÁRIO (CONVERSÕES DE UNIDADE)
+        # ==================================================
+        D_inch = float(entry_diameter.get())
+        D = D_inch * 0.0254  # conversão para metros
+
+        Q_m3h = float(entry_flow.get())
+        Q = Q_m3h / 3600     # conversão para m³/s
+
+        rho = float(entry_density.get())           # kg/m³
+        mu_cp = float(entry_viscosity.get())
+        mu = mu_cp / 1000                          # cP → Pa.s
+
+        L = float(entry_length.get())
+
+        n45 = int(entry_45.get())
+        n90 = int(entry_90.get())
+        n_valves = int(entry_valves.get())
+
+        extra_bar = float(entry_extra.get())
+        extra_pa = extra_bar * 100000
+
+        H = float(entry_head.get())
+
+        # ==================================================
+        # 1) ÁREA DO TUBO
+        # Equação: A = πD² / 4
+        # ==================================================
+        A = math.pi * D**2 / 4
+
+        # ==================================================
+        # 2) VELOCIDADE
+        # Equação: v = Q / A
+        # ==================================================
+        v = Q / A
+
+        # ==================================================
+        # 3) REYNOLDS
+        # Equação: Re = (ρ·v·D) / μ
+        # ==================================================
+        Re = (rho * v * D) / mu
+
+        # ==================================================
+        # 4) FATOR DE ATRITO
+        # ==================================================
+        if Re < 2300:
+            regime = "Laminar"
+            f = 64 / Re
+            friction_text = "f = 64 / Re"
+        else:
+            regime = "Turbulent"
+            f = 0.02
+            friction_text = "f ≈ 0.02 (aproximação)"
+
+        # ==================================================
+        # 5) PERDA DE CARGA (DARCY-WEISBACH)
+        # hf = f·(L/D)·(v² / 2g)
+        # ΔP = ρ·g·hf
+        # ==================================================
+        hf = f * (L / D) * (v**2 / (2 * g))
+        deltaP_pipe = rho * g * hf
+
+        # ==================================================
+        # 6) PERDAS LOCAIS
+        # ΔP = K·(ρ·v² / 2)
+        # ==================================================
+        K_total = n45*0.4 + n90*0.9 + n_valves*1.5
+        deltaP_local = K_total * (rho * v**2 / 2)
+
+        # ==================================================
+        # 7) ALTURA MANOMÉTRICA
+        # ΔP = ρ·g·H
+        # ==================================================
+        deltaP_head = rho * g * H
+
+        # ==================================================
+        # 8) PERDA TOTAL
+        # Soma de todas as contribuições
+        # ==================================================
+        total_bar = (deltaP_pipe + deltaP_local + extra_pa + deltaP_head) / 100000
+
+        # ==================================================
+        # RELATÓRIO COMPLETO (COM EQUAÇÕES)
+        # ==================================================
+        text = f"""
+================ INPUT DATA ================
+D = {D_inch} inch = {D:.4f} m
+Q = {Q_m3h} m³/h = {Q:.4f} m³/s
+ρ = {rho} kg/m³
+μ = {mu_cp} cP = {mu:.4f} Pa.s
+L = {L} m
+
+================ AREA =====================
+A = π·D²/4
+A = {A:.5f} m²
+
+================ VELOCITY =================
+v = Q / A
+v = {v:.3f} m/s
+
+================ REYNOLDS =================
+Re = (ρ·v·D) / μ
+Re = {Re:.0f} → {regime}
+
+================ FRICTION FACTOR ==========
+{friction_text}
+f = {f:.5f}
+
+================ PIPE LOSS (DARCY) ========
+hf = f·(L/D)·(v² / 2g)
+hf = {hf:.3f} m
+
+ΔP_pipe = ρ·g·hf
+ΔP_pipe = {deltaP_pipe/100000:.3f} bar
+
+================ LOCAL LOSSES =============
+ΔP = K·(ρ·v² / 2)
+K_total = {K_total:.2f}
+
+ΔP_local = {deltaP_local/100000:.3f} bar
+
+================ EXTRA LOSS ===============
+ΔP_extra = {extra_bar:.3f} bar
+
+================ STATIC HEAD ==============
+ΔP = ρ·g·H
+ΔP_head = {deltaP_head/100000:.3f} bar
+
+================ TOTAL PRESSURE ===========
+ΔP_total = Σ perdas
+ΔP_total = {total_bar:.3f} bar
+"""
+
+        last_result_text = text
+
+        result_box.delete(1.0, tk.END)
+        result_box.insert(tk.END, text)
+
+    except Exception as e:
+        result_box.insert(tk.END, f"Erro: {str(e)}")
+
+
+# ==========================================================
+# CARREGAR LOGO
+# ==========================================================
+def load_logo():
+    global logo_path
+
+    path = filedialog.askopenfilename(
+        filetypes=[("Image files", "*.png *.jpg *.jpeg")]
+    )
+
+    if path:
+        logo_path = path
+        result_box.insert(tk.END, f"\n\nLogo carregado: {path}\n")
+
+
+# ==========================================================
+# EXPORTAR PDF (COM EQUAÇÕES E FORMATAÇÃO)
+# ==========================================================
+def export_pdf():
+    global last_result_text, logo_path
+
+    if not last_result_text.strip():
+        result_box.insert(tk.END, "\nExecute o cálculo primeiro\n")
+        return
+
+    file_path = filedialog.asksaveasfilename(defaultextension=".pdf")
+
+    if not file_path:
+        return
+
+    doc = SimpleDocTemplate(file_path)
+    styles = getSampleStyleSheet()
+    content = []
+
+    # LOGO
+    if logo_path:
+        content.append(Image(logo_path, width=120, height=60))
+        content.append(Spacer(1, 10))
+
+    # TÍTULO
+    content.append(Paragraph("<b>PROCESS ENGINEERING REPORT</b>", styles["Title"]))
+    content.append(Spacer(1, 20))
+
+    # TEXTO (LINHA POR LINHA)
+    for line in last_result_text.split("\n"):
+        if line.strip() == "":
+            content.append(Spacer(1, 10))
+        else:
+            content.append(Paragraph(line, styles["Normal"]))
+
+    doc.build(content)
+
+    result_box.insert(tk.END, f"\nPDF salvo em: {file_path}\n")
+
+
+# ==========================================================
+# AUTO FLUIDO
+# ==========================================================
+def set_fluid(event):
+    f = combo_fluid.get()
+    if f in fluids:
+        entry_density.delete(0, tk.END)
+        entry_density.insert(0, fluids[f]["rho"])
+
+        entry_viscosity.delete(0, tk.END)
+        entry_viscosity.insert(0, fluids[f]["mu"])
+
+
+# ==========================================================
+# INTERFACE
+# ==========================================================
+root = tk.Tk()
+root.title("Process Engineering Tool")
+root.geometry("520x800")
+
+def add_field(label):
+    frame = ttk.Frame(root)
+    frame.pack(pady=3)
+
+    ttk.Label(frame, text=label).pack(side="left")
+    entry = ttk.Entry(frame)
+    entry.pack(side="right")
+
+    return entry
+
+entry_diameter = add_field("Pipe OD (inch):")
+entry_flow = add_field("Flow (m³/h):")
+entry_length = add_field("Length (m):")
+
+entry_viscosity = add_field("Viscosity (cP):")
+entry_density = add_field("Density (kg/m³):")
+
+combo_fluid = ttk.Combobox(root, values=list(fluids.keys()))
+combo_fluid.pack()
+combo_fluid.bind("<<ComboboxSelected>>", set_fluid)
+
+entry_45 = add_field("45° elbows:")
+entry_90 = add_field("90° elbows:")
+entry_valves = add_field("Valves:")
+entry_extra = add_field("Extra loss (bar):")
+entry_head = add_field("Static head (m):")
+
+ttk.Button(root, text="Calculate", command=calculate).pack(pady=5)
+ttk.Button(root, text="Load Logo", command=load_logo).pack(pady=5)
+ttk.Button(root, text="Export PDF", command=export_pdf).pack(pady=5)
+
+result_box = scrolledtext.ScrolledText(root, width=60, height=25)
+result_box.pack(pady=10)
+result_box.config(font=("Consolas", 10))
+
+root.mainloop()
